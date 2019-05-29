@@ -4,5 +4,7 @@
 * sk-learn
 * numpy
 * others
+
+* before start test, you must download the "glove.6B.50d.txt" file
 ###start test
 python3 main.py
