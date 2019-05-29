@@ -1,0 +1,168 @@
+import tensorflow as tf
+import numpy as np
+import pandas as pd
+import re
+class Hate_net(object):
+    def __init__(self):
+        self.input_dimension=50
+        self.input_lens=30
+        self.hidden_size=128
+        self.num_layer=5
+        self.cell_size=16
+        self.triplet_loss_margin=1.0
+        self.batch_size=18
+
+        self.encoder_inputs = []
+        self.decoder_inputs = []
+        self.target_weights = []
+
+        self.cell_fw=tf.nn.rnn_cell.LSTMCell(self.hidden_size,initializer=tf.truncated_normal_initializer)
+        self.cell_bw=tf.nn.rnn_cell.LSTMCell(self.hidden_size,initializer=tf.truncated_normal_initializer)
+        self.input_embedding=tf.placeholder(tf.float32,shape=[self.batch_size,self.input_lens,self.input_dimension])
+
+        self.output_label=tf.placeholder(tf.int32,[self.batch_size])
+
+
+    def dataset_load(self):
+        print("load datasets ...")
+        df = pd.read_csv('labeled_data.csv')
+        self.tweets = df['tweet'].values
+        self.speech_class = df['class'].values
+        self.hate_ids = []
+        self.offensive_ids = []
+        self.neither_ids = []
+        emoji = re.compile("&#[0-9]*")
+        amp = re.compile("&amp")
+        name = re.compile("@[a-z,A-Z,0-9,_]*")
+        http_link = re.compile("http://t.co[a-z,A-Z,/,0-9]*")
+        token = re.compile("[,.;<>:]")
+        for i in range(len(self.speech_class)):
+            if self.speech_class[i] == 0:
+                self.hate_ids.append(i)
+            if self.speech_class[i] == 1:
+                self.offensive_ids.append(i)
+            if self.speech_class[i] == 2:
+                self.neither_ids.append(i)
+        for i in range(len(self.tweets)):
+            tweet_temp=self.tweets[i]
+            tweet_temp = re.sub(emoji, '', tweet_temp).lower().strip()
+            tweet_temp = re.sub(name, '', tweet_temp)
+            tweet_temp = re.sub(http_link, '', tweet_temp)
+            tweet_temp = re.sub(amp, '', tweet_temp)
+            tweet_temp = re.sub(token, '', tweet_temp)
+            self.tweets[i]=tweet_temp
+        self.tweets_data=[]
+
+        def load_vectors_glove(file_name):
+            print("load vectors...")
+            with open(file_name, 'r') as f:
+                words = set()
+                word_to_vec_map = {}
+
+                for line in f:
+                    line = line.strip().split()
+                    curr_word = line[0]
+                    words.add(curr_word)
+                    word_to_vec_map[curr_word] = np.array(line[1:], dtype=np.float64)
+            print("done ...")
+            return words, word_to_vec_map
+
+
+        words,word_to_vec_map=load_vectors_glove('glove.6B.50d.txt')
+        for i in range(len(self.tweets)):
+            tweet_temp = self.tweets[i]
+            vector_temp=[]
+            zero_vec=np.zeros([self.input_dimension])
+            for i_charac in tweet_temp.split():
+                if i_charac in words:
+                    vector_temp.append(list(word_to_vec_map[i_charac]))
+                if vector_temp.__len__()>=self.input_lens:
+                    print("over length!")
+                    break
+            for i in range(vector_temp.__len__(),self.input_lens):
+                vector_temp.append(list(zero_vec))
+            self.tweets_data.append(vector_temp)
+
+        print("done ...")
+    def creat_net(self):
+        print("creating network...")
+        x_lenth=[self.input_lens]*self.batch_size
+        self.bid_output,bid_state=tf.nn.bidirectional_dynamic_rnn(self.cell_fw,self.cell_bw,self.input_embedding,
+                                                                  sequence_length=x_lenth,dtype=tf.float32)
+
+        lstm_outputs = tf.concat([self.bid_output[0], self.bid_output[1]], -1)
+        self.bid_shape=tf.shape(lstm_outputs)
+        lstm_outputs_=tf.layers.flatten(lstm_outputs)
+        dense0=tf.layers.dense(lstm_outputs_,512,activation=tf.nn.relu,kernel_initializer=tf.truncated_normal_initializer,kernel_regularizer=tf.contrib.layers.l2_regularizer(0.002))
+        self.output=tf.layers.dense(dense0,256,activation=tf.nn.l2_normalize,kernel_initializer=tf.truncated_normal_initializer,kernel_regularizer=tf.contrib.layers.l2_regularizer(0.002))
+
+        '''anc, pos, neg = self.output[::3, :], self.output[1::3, :], self.output[2::3, :]
+        # 欧式距离
+        pos_dist = tf.reduce_sum(tf.square(anc - pos), axis=-1, keepdims=True)
+        neg_dist = tf.reduce_sum(tf.square(anc - neg), axis=-1, keepdims=True)
+        basic_loss = pos_dist - neg_dist + self.triplet_loss_margin
+        self.triplet_loss = tf.maximum(basic_loss, 0.0)'''
+        self.triplet_loss=tf.contrib.losses.metric_learning.triplet_semihard_loss(self.output_label,self.output,self.triplet_loss_margin)
+        self.train_op=tf.train.AdamOptimizer(0.01).minimize(self.triplet_loss)
+        print("done ...")
+    def generate_dataset(self,batch_size=18):
+
+
+        import random
+
+        return_x_datas = []
+        return_y_datas = []
+        first_class=0
+        second_class=0
+        select_class=0
+        for i in range(batch_size):
+            i_temp=i%3
+            if i_temp==0:
+                first_class=random.sample([0,1,2],1)[0]
+                select_class=first_class
+            if i_temp==1:
+                select_class=first_class
+            if i_temp==2:
+                second_class=random.sample([0,1,2],1)[0]
+                while second_class==first_class:
+                    second_class = random.sample([0, 1, 2],1)[0]
+                select_class=second_class
+            tweet_samp_id=0
+            if select_class==0:
+                tweet_samp_id=random.sample(self.hate_ids,1)[0]
+            if select_class==1:
+                tweet_samp_id = random.sample(self.offensive_ids,1)[0]
+            if select_class==2:
+                tweet_samp_id= random.sample(self.neither_ids,1)[0]
+            return_x_datas.append(self.tweets_data[tweet_samp_id])
+            return_y_datas.append(select_class)
+        return np.array(return_x_datas), np.array(return_y_datas)
+
+    def train_op_test(self):
+        with tf.Session() as sess:
+            init_=tf.global_variables_initializer()
+            sess.run(init_)
+            saver=tf.train.Saver()
+            saver.restore(sess,'./model/60000_save_model.ckpt')
+            for i in range(1000000):
+                input_data_x,input_data_y=self.generate_dataset(self.batch_size)
+                #print(np.shape(input_data_x) )
+                _ = sess.run(self.train_op,feed_dict={self.input_embedding:input_data_x,self.output_label:input_data_y})
+                if i % 300==0:
+                    output_=sess.run(self.output,feed_dict={self.input_embedding:input_data_x,self.output_label:input_data_y})
+                    #print(sess.run(self.bid_shape))
+                    #print(np.shape(output_))
+                    #print( output_)
+                    #print(input_data_y)
+                    #print(np.shape(output_))
+                    #print(output_)
+                    pos_=np.sum(np.square(output_[0]-output_[1]))
+                    neg_=np.sum(np.square(output_[0]-output_[2]))
+                    print(pos_,neg_)
+                    print("step ",i,' loss ',sess.run([self.triplet_loss],feed_dict={self.input_embedding:input_data_x,self.output_label:input_data_y}))
+                if i%10000==0:
+                    saver.save(sess,'./model/%d_save_model.ckpt'%i)
+
+
+
+

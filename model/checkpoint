@@ -1,0 +1,6 @@
+model_checkpoint_path: "1760000_save_model.ckpt"
+all_model_checkpoint_paths: "1720000_save_model.ckpt"
+all_model_checkpoint_paths: "1730000_save_model.ckpt"
+all_model_checkpoint_paths: "1740000_save_model.ckpt"
+all_model_checkpoint_paths: "1750000_save_model.ckpt"
+all_model_checkpoint_paths: "1760000_save_model.ckpt"
